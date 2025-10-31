@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>3D Globe + Weather Overlay + Open-Meteo + Day Toggle</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <link href="https://api.mapbox.com/mapbox-gl-js/v3.15.0/mapbox-gl.css" rel="stylesheet" />
+  <script src="https://api.mapbox.com/mapbox-gl-js/v3.15.0/mapbox-gl.js"></script>
+  <style>
+    :root {
+      --card-width: 420px;
+      --transition-duration: 450ms;
+      --bg-card: rgba(255,255,255,0.98);
+      --accent: #2b88c6;
+    }
+
+    html,body{
+      height:100%;
+      margin:0;
+      font-family:"Segoe UI",Roboto,Arial,sans-serif;
+      background:#000;
+    }
+
+    .app {
+      width:100%;
+      height:100%;
+      position:relative;
+      overflow:hidden;
+      display:grid;
+      grid-template-columns: 1fr;
+      transition: all var(--transition-duration) cubic-bezier(.2,.9,.3,1);
+    }
+
+    .app.split { grid-template-columns: 1fr var(--card-width); }
+
+    #map {
+      width:100%;
+      height:100%;
+      transition: all var(--transition-duration) cubic-bezier(.2,.9,.3,1);
+    }
+
+    /* CARD */
+    .card {
+      position: absolute;
+      width: var(--card-width);
+      max-height: 80vh;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%) scale(0.98);
+      background: var(--bg-card);
+      border-radius: 12px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.45);
+      z-index: 30;
+      padding: 18px;
+      opacity: 0;
+      pointer-events: none;
+      transition: transform var(--transition-duration), opacity var(--transition-duration);
+      display:flex;
+      flex-direction:column;
+      gap:10px;
+    }
+
+    .card.visible { opacity:1; pointer-events:auto; transform:translate(-50%,-50%) scale(1); }
+
+    .app.split .card {
+      position: relative;
+      left: auto;
+      top: auto;
+      transform: none;
+      margin: 0;
+      opacity: 1;
+      pointer-events: auto;
+      width: 100%;
+      height: 100vh;
+      border-radius: 0;
+      box-shadow: none;
+      overflow-y: auto;
+    }
+
+    .controls {
+      position:absolute;
+      top:14px;
+      left:50%;
+      transform: translateX(-50%);
+      z-index:40;
+      display:flex;
+      gap:8px;
+    }
+
+    .controls button {
+      background: rgba(255,255,255,0.95);
+      border:none;
+      padding:8px 12px;
+      border-radius:8px;
+      cursor:pointer;
+      font-weight:600;
+      color:#111;
+      box-shadow:0 4px 12px rgba(0,0,0,0.18);
+    }
+
+    .controls button.toggle-on {
+      background: var(--accent);
+      color:#fff;
+    }
+
+    .topbar {
+      display:flex;
+      justify-content:space-between;
+      align-items:center;
+    }
+
+    .title {
+      font-size:18px;
+      font-weight:700;
+      color:#111;
+    }
+
+    .card .close-btn, .card .split-btn {
+      background:transparent;
+      border:1px solid #ddd;
+      padding:6px 9px;
+      border-radius:6px;
+      cursor:pointer;
+      font-weight:600;
+    }
+
+    .card .split-btn {
+      background: var(--accent);
+      color:#fff;
+      border:none;
+    }
+
+    .content { margin-top:6px; flex:1; overflow:auto; }
+
+    .metric {
+      display:flex;
+      justify-content:space-between;
+      align-items:center;
+      padding:8px 6px;
+      border-radius:8px;
+      background: rgba(0,0,0,0.02);
+      color:#111;
+      font-weight:600;
+    }
+
+    .meta { color:#666; font-size:13px; }
+
+    /* Day toggle */
+    .day-toggle {
+      display:flex;
+      justify-content:center;
+      align-items:center;
+      gap:8px;
+      margin:8px 0;
+    }
+    .day-toggle button {
+      padding:5px 10px;
+      border:none;
+      border-radius:20px;
+      cursor:pointer;
+      background:#eee;
+      color:#111;
+      font-weight:600;
+      transition:background 0.2s;
+    }
+    .day-toggle button.active { background:var(--accent); color:#fff; }
+
+    @media(max-width:900px){
+      :root{ --card-width: 360px; }
+      .app.split { grid-template-columns: 1fr 360px; }
+    }
+    @media(max-width:600px){
+      .app.split { grid-template-columns: 1fr; }
+      .card { width: calc(100% - 36px); left:50%; transform:translate(-50%,-40%); }
+    }
+  </style>
+</head>
+<body>
+  <div id="app" class="app">
+    <div id="map"></div>
+
+    <div class="controls" id="layerControls">
+      <button id="btnClouds">☁️ Clouds</button>
+      <button id="btnRain">🌧️ Rain</button>
+      <button id="btnTemp">🌡️ Temp</button>
+      <button id="btnWind">💨 Wind</button>
+    </div>
+
+    <div id="weatherCard" class="card" aria-hidden="true">
+      <div class="topbar">
+        <div class="title" id="cardTitle">Selected Location</div>
+        <div style="display:flex;gap:8px;">
+          <button class="split-btn" id="splitBtn">Split View</button>
+          <button class="close-btn" id="closeBtn">Close</button>
+        </div>
+      </div>
+
+      <div class="content" id="cardContent">
+        <div class="meta" id="cardCoords">Click on globe to fetch weather.</div>
+
+        <div class="day-toggle">
+          <button id="prevDay">← Yesterday</button>
+          <div id="dayLabel" style="font-weight:700;color:#111;">Today</div>
+          <button id="nextDay">Tomorrow →</button>
+        </div>
+
+        <div class="metric"><div>🌡 Temperature</div><div id="mTemp">— °C</div></div>
+        <div class="metric"><div>💨 Wind</div><div id="mWind">— m/s</div></div>
+        <div class="metric"><div>💧 Humidity</div><div id="mHum">— %</div></div>
+        <div class="metric"><div>☁ Condition</div><div id="mCond">—</div></div>
+
+        <div style="margin-top:12px;font-size:13px;color:#666;">Click any point to update. Toggle overlays above.</div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const MAPBOX_TOKEN = "pk.eyJ1Ijoic3VzYW4wMDAwMDA3IiwiYSI6ImNtaGJ0bWcwcjEyNDkyaXNoNXowMDd0eXcifQ.Bp7miSYXMTi2W9RchOIhXA";
+    const OPENWEATHER_KEY = "ec4432e09b9bcb4953de4d3b771e4fc3"; // only for overlay tiles
+
+    mapboxgl.accessToken = MAPBOX_TOKEN;
+    const app = document.getElementById("app");
+    const card = document.getElementById("weatherCard");
+    const splitBtn = document.getElementById("splitBtn");
+    const closeBtn = document.getElementById("closeBtn");
+    const mTemp = document.getElementById("mTemp");
+    const mWind = document.getElementById("mWind");
+    const mHum = document.getElementById("mHum");
+    const mCond = document.getElementById("mCond");
+    const cardTitle = document.getElementById("cardTitle");
+    const cardCoords = document.getElementById("cardCoords");
+    const dayLabel = document.getElementById("dayLabel");
+
+    const map = new mapboxgl.Map({
+      container: "map",
+      style: "mapbox://styles/mapbox/standard-satellite",
+      center: [78.9629, 20.5937],
+      zoom: 1.6,
+      projection: "globe",
+    });
+
+    // Weather overlay layers
+    const layers = {
+      clouds: `https://tile.openweathermap.org/map/clouds_new/{z}/{x}/{y}.png?appid=${OPENWEATHER_KEY}`,
+      rain: `https://tile.openweathermap.org/map/precipitation_new/{z}/{x}/{y}.png?appid=${OPENWEATHER_KEY}`,
+      temp: `https://tile.openweathermap.org/map/temp_new/{z}/{x}/{y}.png?appid=${OPENWEATHER_KEY}`,
+      wind: `https://tile.openweathermap.org/map/wind_new/{z}/{x}/{y}.png?appid=${OPENWEATHER_KEY}`
+    };
+
+    map.on("style.load", () => {
+      map.setFog({});
+      Object.entries(layers).forEach(([key, tile]) => {
+        map.addSource(`${key}-src`, { type: "raster", tiles: [tile], tileSize: 256 });
+        map.addLayer({ id: `${key}-layer`, type: "raster", source: `${key}-src`, layout: { visibility: "none" }, paint: { "raster-opacity": 0.7 } });
+      });
+    });
+
+    // Layer toggle
+    const toggleBtn = id => {
+      const layerId = `${id}-layer`;
+      const vis = map.getLayoutProperty(layerId, "visibility");
+      map.setLayoutProperty(layerId, "visibility", vis === "visible" ? "none" : "visible");
+      document.getElementById(`btn${id.charAt(0).toUpperCase()+id.slice(1)}`).classList.toggle("toggle-on", vis !== "visible");
+    };
+    document.getElementById("btnClouds").onclick = ()=>toggleBtn("clouds");
+    document.getElementById("btnRain").onclick = ()=>toggleBtn("rain");
+    document.getElementById("btnTemp").onclick = ()=>toggleBtn("temp");
+    document.getElementById("btnWind").onclick = ()=>toggleBtn("wind");
+
+    // UI transitions
+    const showCard = ()=>{ card.classList.add("visible"); app.classList.remove("split"); map.dragPan.disable(); };
+    const hideCard = ()=>{ card.classList.remove("visible"); app.classList.remove("split"); map.dragPan.enable(); };
+    const enableSplit = ()=>{ app.classList.add("split"); map.dragPan.enable(); };
+    const disableSplit = ()=>{ app.classList.remove("split"); map.dragPan.disable(); };
+
+    closeBtn.onclick = hideCard;
+    splitBtn.onclick = ()=> app.classList.contains("split") ? disableSplit() : enableSplit();
+
+    // ---- Open-Meteo Weather Fetch ----
+    async function fetchWeather(lat, lon) {
+      const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&hourly=temperature_2m,relative_humidity_2m,wind_speed_10m,weathercode&past_days=1&forecast_days=2&timezone=auto`;
+      return fetch(url).then(r=>r.json());
+    }
+
+    function codeToText(code){
+      const map = {0:"Clear sky",1:"Mainly clear",2:"Partly cloudy",3:"Overcast",45:"Fog",48:"Rime fog",51:"Light drizzle",53:"Moderate drizzle",55:"Dense drizzle",61:"Light rain",63:"Moderate rain",65:"Heavy rain",71:"Light snow",73:"Moderate snow",75:"Heavy snow",80:"Light rain showers",81:"Moderate rain showers",82:"Violent rain showers",95:"Thunderstorm",99:"Hailstorm"};
+      return map[code]||"Unknown";
+    }
+
+    function summarizeDay(data, offset){
+      const h = data.hourly;
+      if(!h) return null;
+      const times = h.time.map(t=>new Date(t));
+      const now = new Date();
+      const tgt = new Date(now);
+      tgt.setDate(now.getDate()+offset);
+      const tgtDate = tgt.toISOString().split("T")[0];
+      const idx = times.map((t,i)=>t.toISOString().startsWith(tgtDate)?i:-1).filter(i=>i>=0);
+      if(!idx.length) return null;
+      const avg = arr=>arr.reduce((a,b)=>a+b,0)/arr.length;
+      const t = avg(idx.map(i=>h.temperature_2m[i])).toFixed(1);
+      const hum = avg(idx.map(i=>h.relative_humidity_2m[i])).toFixed(0);
+      const wind = avg(idx.map(i=>h.wind_speed_10m[i])).toFixed(1);
+      const codeCount={};
+      idx.forEach(i=>codeCount[h.weathercode[i]]=(codeCount[h.weathercode[i]]||0)+1);
+      const code=Object.entries(codeCount).sort((a,b)=>b[1]-a[1])[0][0];
+      return {t,hum,wind,cond:codeToText(code)};
+    }
+
+    function updateCard(data,offset){
+      const d=summarizeDay(data,offset);
+      if(!d){mTemp.textContent=mWind.textContent=mHum.textContent=mCond.textContent="—";return;}
+      mTemp.textContent=`${d.t} °C`;
+      mWind.textContent=`${d.wind} m/s`;
+      mHum.textContent=`${d.hum}%`;
+      mCond.textContent=d.cond;
+      dayLabel.textContent=offset===-1?"Yesterday":offset===0?"Today":"Tomorrow";
+    }
+
+    let currentOffset=0;
+    document.getElementById("prevDay").onclick=()=>{if(window._weather){currentOffset=Math.max(-1,currentOffset-1);updateCard(_weather,currentOffset);}};
+    document.getElementById("nextDay").onclick=()=>{if(window._weather){currentOffset=Math.min(1,currentOffset+1);updateCard(_weather,currentOffset);}};
+
+    map.on("click",async e=>{
+      const {lat,lng}=e.lngLat;
+      showCard();
+      cardTitle.textContent="Loading…";
+      cardCoords.textContent=`Lat: ${lat.toFixed(4)}, Lon: ${lng.toFixed(4)}`;
+      mTemp.textContent=mWind.textContent=mHum.textContent=mCond.textContent="—";
+      try{
+        const data=await fetchWeather(lat,lng);
+        window._weather=data;
+        currentOffset=0;
+        updateCard(data,0);
+        cardTitle.textContent="Selected Location";
+      }catch{cardTitle.textContent="Error";cardCoords.textContent="Could not fetch.";}
+    });
+
+    // Auto resize on layout transitions
+    const observer=new MutationObserver(()=>setTimeout(()=>map.resize(),500));
+    observer.observe(app,{attributes:true,attributeFilter:["class"]});
+  </script>
+</body>
+</html>
